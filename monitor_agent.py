@@ -1,6 +1,7 @@
 import time
 import psutil
 import requests
+import subprocess
 from influxdb_client import InfluxDBClient, Point, WriteOptions
 
 # InfluxDB settings
@@ -55,15 +56,31 @@ def collect_system_metrics():
     cpu = psutil.cpu_percent(interval=1)
     memory = psutil.virtual_memory().percent
     disk = psutil.disk_usage('/').percent
-    print(f"[System] CPU: {cpu}%, Memory: {memory}%, Disk: {disk}%")
-    return cpu, memory, disk
+    gpu = collect_gpu_usage()
+    print(f"[System] CPU: {cpu}%, Memory: {memory}%, Disk: {disk}%, GPU: {gpu}%")
+    return cpu, memory, disk, gpu
 
-def write_metrics_to_influx(cpu, memory, disk, streamlit_latency):
+def collect_gpu_usage():
+    try:
+        output = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
+            stderr=subprocess.DEVNULL
+        )
+        gpu_percent = int(output.decode("utf-8").strip())
+        return gpu_percent
+    except Exception as e:
+        print(f"[GPU] Could not retrieve GPU usage: {e}")
+        return None
+
+def write_metrics_to_influx(cpu, memory, disk, gpu, streamlit_latency):
     point = Point("server_metrics") \
         .field("cpu_percent", cpu) \
         .field("memory_percent", memory) \
         .field("disk_percent", disk)
 
+    if gpu is not None:
+        point.field("gpu_percent", gpu)
+    
     if streamlit_latency is not None:
         point.field("streamlit_latency_ms", streamlit_latency)
 
@@ -83,8 +100,8 @@ def main():
 
         # Every 10 seconds
         streamlit_latency = test_streamlit_load()
-        cpu, memory, disk = collect_system_metrics()
-        write_metrics_to_influx(cpu, memory, disk, streamlit_latency)
+        cpu, memory, disk, gpu = collect_system_metrics()
+        write_metrics_to_influx(cpu, memory, disk, gpu, streamlit_latency)
 
         time.sleep(10)
 
